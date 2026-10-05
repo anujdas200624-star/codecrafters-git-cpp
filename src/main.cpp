@@ -1,4 +1,4 @@
-```cpp
+
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -385,4 +385,4 @@ int main(int argc, char *argv[])
 
     return EXIT_SUCCESS;
 }
-```
+
