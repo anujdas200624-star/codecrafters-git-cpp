@@ -1,17 +1,18 @@
-
+```cpp
 #include <iostream>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <cstring>
+
 #include "list_tree.h"
+
 #include <zstr.hpp>
 #include <openssl/sha.h>
 #include <zlib.h>
 
 
-// Convert a byte to a 2-character hexadecimal string.
-// Example: 0xab -> "ab"
 std::string char_hex(unsigned char data)
 {
     const std::string hex = "0123456789abcdef";
@@ -28,23 +29,18 @@ std::string char_hex(unsigned char data)
 
 int main(int argc, char *argv[])
 {
-    // Flush output immediately
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
 
-    // Debug message
     std::cerr << "Logs from your program will appear here!\n";
 
-
-    // =========================================================
-    // Check command
-    // =========================================================
 
     if (argc < 2)
     {
         std::cerr << "No command provided.\n";
         return EXIT_FAILURE;
     }
+
 
     std::string command = argv[1];
 
@@ -57,24 +53,21 @@ int main(int argc, char *argv[])
     {
         try
         {
-            std::filesystem::create_directory(".git");
-            std::filesystem::create_directory(".git/objects");
-            std::filesystem::create_directory(".git/refs");
+            std::filesystem::create_directories(".git/objects");
+            std::filesystem::create_directories(".git/refs");
 
             std::ofstream headFile(".git/HEAD");
 
-            if (headFile.is_open())
-            {
-                headFile << "ref: refs/heads/main\n";
-                headFile.close();
-            }
-            else
+            if (!headFile.is_open())
             {
                 std::cerr
                     << "Failed to create .git/HEAD file.\n";
 
                 return EXIT_FAILURE;
             }
+
+            headFile << "ref: refs/heads/main\n";
+            headFile.close();
 
             std::cout << "Initialized git directory\n";
         }
@@ -102,19 +95,12 @@ int main(int argc, char *argv[])
 
         std::string file_name = argv[3];
 
-        // Git object path:
-        //
-        // .git/objects/ab/cdef123...
-        //
-
         std::string file_location =
             std::string(".git/objects/") +
             file_name.substr(0, 2) +
             "/" +
             file_name.substr(2);
 
-
-        // Open and decompress the object
         zstr::ifstream file(file_location);
 
         if (!file.is_open())
@@ -125,28 +111,26 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
-
-        // Read decompressed object
         std::string contents(
             (std::istreambuf_iterator<char>(file)),
             std::istreambuf_iterator<char>()
         );
 
-
-        // Git object format:
-        //
-        // blob <size>\0<contents>
-        //
-
         size_t header_size =
             contents.find('\0') + 1;
 
+        if (header_size == 0)
+        {
+            std::cerr
+                << "Invalid Git object.\n";
 
-        // Print only the actual contents
+            return EXIT_FAILURE;
+        }
+
         std::cout <<
             std::string_view(
-                contents.begin() + header_size,
-                contents.end()
+                contents.data() + header_size,
+                contents.size() - header_size
             );
     }
 
@@ -165,14 +149,7 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
-
-        // Get filename
         std::string file_name = argv[3];
-
-
-        // -----------------------------------------------------
-        // Read file
-        // -----------------------------------------------------
 
         std::ifstream file(
             file_name,
@@ -187,7 +164,6 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
-
         std::string contents(
             (std::istreambuf_iterator<char>(file)),
             std::istreambuf_iterator<char>()
@@ -196,32 +172,21 @@ int main(int argc, char *argv[])
         file.close();
 
 
-        // -----------------------------------------------------
-        // Create Git blob header
-        // -----------------------------------------------------
-
-        // Git blob header:
+        // Git blob:
         //
-        // blob <size>\0
-        //
+        // blob <size>\0<contents>
 
         std::string header =
             "blob " +
             std::to_string(contents.size()) +
             '\0';
 
-
-        // Complete Git object:
-        //
-        // header + contents
-        //
-
         std::string store =
             header + contents;
 
 
         // -----------------------------------------------------
-        // Calculate SHA-1
+        // SHA-1
         // -----------------------------------------------------
 
         unsigned char output_buffer[SHA_DIGEST_LENGTH];
@@ -235,7 +200,8 @@ int main(int argc, char *argv[])
         );
 
 
-        // Print 40-character SHA-1
+        // Print SHA-1
+
         for (size_t i = 0;
              i < SHA_DIGEST_LENGTH;
              i++)
@@ -248,18 +214,11 @@ int main(int argc, char *argv[])
 
 
         // -----------------------------------------------------
-        // Create Git object path
+        // Git object path
         // -----------------------------------------------------
-
-        // First 2 hex characters
-        // become directory name.
 
         std::string dir_name =
             char_hex(output_buffer[0]);
-
-
-        // Remaining 38 characters
-        // become filename.
 
         std::string hash_file_name;
 
@@ -272,17 +231,11 @@ int main(int argc, char *argv[])
         }
 
 
-        // Create:
-        //
-        // .git/objects/xx
-        //
-
         std::filesystem::create_directories(
             ".git/objects/" + dir_name
         );
 
 
-        // Full object path
         std::string hash_file_path =
             ".git/objects/" +
             dir_name +
@@ -291,7 +244,7 @@ int main(int argc, char *argv[])
 
 
         // -----------------------------------------------------
-        // Compress using zlib
+        // Zlib compression
         // -----------------------------------------------------
 
         uLong source_size =
@@ -300,15 +253,12 @@ int main(int argc, char *argv[])
         uLong compressed_size =
             compressBound(source_size);
 
-
-        // Allocate buffer for compressed data
         std::string compressed_data(
             compressed_size,
             '\0'
         );
 
 
-        // Compress the Git object
         int result = compress2(
             reinterpret_cast<Bytef*>(
                 compressed_data.data()
@@ -335,7 +285,6 @@ int main(int argc, char *argv[])
         }
 
 
-        // Resize to actual compressed size
         compressed_data.resize(
             compressed_size
         );
@@ -358,7 +307,6 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
-
         output_file.write(
             compressed_data.data(),
             compressed_data.size()
@@ -367,17 +315,40 @@ int main(int argc, char *argv[])
         output_file.close();
     }
 
-else if (command == "ls-tree") {
-    bool name_only = false;
-    if (argc == 4) {
-      if (std::strcmp(argv[2], "--name-only") == 0) {
-        name_only = true;
-      }
+
+    // =========================================================
+    // LS-TREE
+    // =========================================================
+
+    else if (command == "ls-tree")
+    {
+        bool name_only = false;
+
+        if (argc == 4)
+        {
+            if (
+                std::strcmp(
+                    argv[2],
+                    "--name-only"
+                ) == 0
+            )
+            {
+                name_only = true;
+            }
+        }
+
+
+        std::string_view hash =
+            argv[argc - 1];
+
+
+        list_tree::invoke(
+            hash,
+            name_only
+        );
     }
 
-    std::string_view hash { argv[argc - 1] };
-    list_tree::invoke(hash, name_only);
-  }
+
     // =========================================================
     // UNKNOWN COMMAND
     // =========================================================
@@ -395,4 +366,4 @@ else if (command == "ls-tree") {
 
     return EXIT_SUCCESS;
 }
-
+```
