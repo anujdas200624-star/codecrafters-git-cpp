@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include "zstr/zstr.hpp"
 
 int main(int argc, char *argv[])
 {
@@ -41,7 +42,19 @@ int main(int argc, char *argv[])
             std::cerr << e.what() << '\n';
             return EXIT_FAILURE;
         }
-    } else {
+    } 
+    else if(command == "cat-file"){
+        std:: string file_name = argv[3];
+        std::string file_location = std::string(".git/objects/")+std::string(file_name.substr(0,2))+'/'+std::std::string(file_name.substr(2));
+        zstr::ifstream file(file_location);
+
+        std::string contents((std::istreambuf_iterator<char>(file)),(std::istreambuf_iterator<char>()));
+
+        size_t header_size = contents.find('\0')+1;
+
+        std::cout<< std::string_view(contents.begin()+header_size,contents.end());
+    }
+    else {
         std::cerr << "Unknown command " << command << '\n';
         return EXIT_FAILURE;
     }
