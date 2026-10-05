@@ -15,7 +15,7 @@ std::string char_hex(unsigned char data)
 {
 const std::string hex = "0123456789abcdef";
 
-```
+
 return std::string{
     hex[data >> 4],
     hex[data & 0x0f]
@@ -521,4 +521,3 @@ else if (command == "ls-tree")
 
     std::string hash =
         argv[argc - 1];
-```
