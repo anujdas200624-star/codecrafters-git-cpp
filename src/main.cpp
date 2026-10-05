@@ -182,3 +182,122 @@ int main(int argc, char* argv[])
             std::cerr << "Invalid object hash.\n";
             return EXIT_FAILURE;
         }
+
+        std::string file_location = std::string(".git/objects/") + file_name.substr(0, 2) + "/" + file_name.substr(2);
+        zstr::ifstream file(file_location);
+
+        if (!file.is_open())
+        {
+            std::cerr << "Could not open object file.\n";
+            return EXIT_FAILURE;
+        }
+
+        std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        size_t null_pos = contents.find('\0');
+
+        if (null_pos == std::string::npos)
+        {
+            std::cerr << "Invalid Git object.\n";
+            return EXIT_FAILURE;
+        }
+
+        std::cout << std::string_view(contents.data() + null_pos + 1, contents.size() - null_pos - 1);
+    }
+
+    // =========================================================
+    // HASH-OBJECT
+    // =========================================================
+    else if (command == "hash-object")
+    {
+        if (argc < 4)
+        {
+            std::cerr << "Usage: hash-object -w <file>\n";
+            return EXIT_FAILURE;
+        }
+
+        std::string file_name = argv[3];
+        std::ifstream file(file_name, std::ios::binary);
+
+        if (!file.is_open())
+        {
+            std::cerr << "Could not open file.\n";
+            return EXIT_FAILURE;
+        }
+
+        std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        file.close();
+
+        // Blob header formatting
+        std::string header = "blob " + std::to_string(contents.size()) + '\0';
+        std::string store = header + contents;
+
+        // SHA-1
+        unsigned char output_buffer[SHA_DIGEST_LENGTH];
+        SHA1(reinterpret_cast<const unsigned char*>(store.data()), store.size(), output_buffer);
+        std::string hash = bytes_to_hex(output_buffer, SHA_DIGEST_LENGTH);
+
+        std::cout << hash << '\n';
+
+        // Object path
+        std::string dir_name = hash.substr(0, 2);
+        std::string hash_file_name = hash.substr(2);
+        std::filesystem::create_directories(".git/objects/" + dir_name);
+        std::string hash_file_path = ".git/objects/" + dir_name + "/" + hash_file_name;
+
+        // Standard Zlib compression
+        uLong source_size = static_cast<uLong>(store.size());
+        uLong compressed_size = compressBound(source_size);
+        std::string compressed_data(compressed_size, '\0');
+
+        int result = compress(
+            reinterpret_cast<Bytef*>(compressed_data.data()),
+            &compressed_size,
+            reinterpret_cast<const Bytef*>(store.data()),
+            source_size
+        );
+
+        if (result != Z_OK)
+        {
+            std::cerr << "Failed to compress Git object.\n";
+            return EXIT_FAILURE;
+        }
+        
+        compressed_data.resize(compressed_size);
+
+        // Write object
+        std::ofstream output_file(hash_file_path, std::ios::binary);
+        if (!output_file.is_open())
+        {
+            std::cerr << "Could not create Git object file.\n";
+            return EXIT_FAILURE;
+        }
+        output_file.write(compressed_data.data(), compressed_data.size());
+        output_file.close();
+    }
+
+    // =========================================================
+    // LS-TREE
+    // =========================================================
+    else if (command == "ls-tree")
+    {
+        bool name_only = false;
+        if (argc == 4 && std::strcmp(argv[2], "--name-only") == 0)
+        {
+            name_only = true;
+        }
+
+        std::string hash = argv[argc - 1];
+        ls_tree(hash, name_only);
+    }
+
+    // =========================================================
+    // UNKNOWN COMMAND
+    // =========================================================
+    else
+    {
+        std::cerr << "Unknown command " << command << '\n';
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
