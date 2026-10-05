@@ -4,7 +4,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
-
+#include "list_tree.h"
 #include <zstr.hpp>
 #include <openssl/sha.h>
 #include <zlib.h>
@@ -367,7 +367,17 @@ int main(int argc, char *argv[])
         output_file.close();
     }
 
+else if (command == "ls-tree") {
+    bool name_only = false;
+    if (argc == 4) {
+      if (std::strcmp(argv[2], "--name-only") == 0) {
+        name_only = true;
+      }
+    }
 
+    std::string_view hash { argv[argc - 1] };
+    list_tree::invoke(hash, name_only);
+  }
     // =========================================================
     // UNKNOWN COMMAND
     // =========================================================
