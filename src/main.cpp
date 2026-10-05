@@ -1,3 +1,4 @@
+```cpp
 #include <iostream>
 #include <filesystem>
 #include <fstream>
@@ -5,18 +6,6 @@
 #include <sstream>
 #include <zstr.hpp>
 #include <openssl/sha.h>
-#include <zlib.h>
-
-std::string compress_string(const std::string &input) {
-    std::ostringstream compressed_stream;
-
-    {
-        zstr::ostream zs(compressed_stream);
-        zs << input;
-    }
-
-    return compressed_stream.str();
-}
 
 std::string char_hex(unsigned char data) {
     const std::string hex = "0123456789abcdef";
@@ -29,9 +18,11 @@ std::string char_hex(unsigned char data) {
 
 int main(int argc, char *argv[])
 {
+    // Flush after every std::cout / std::cerr
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
 
+    // Debug logs
     std::cerr << "Logs from your program will appear here!\n";
 
     if (argc < 2) {
@@ -41,6 +32,9 @@ int main(int argc, char *argv[])
 
     std::string command = argv[1];
 
+    // ---------------------------------------------------------
+    // git init
+    // ---------------------------------------------------------
     if (command == "init") {
         try {
             std::filesystem::create_directory(".git");
@@ -65,7 +59,15 @@ int main(int argc, char *argv[])
         }
     }
 
+    // ---------------------------------------------------------
+    // git cat-file
+    // ---------------------------------------------------------
     else if (command == "cat-file") {
+
+        if (argc < 4) {
+            std::cerr << "Usage: cat-file -p <hash>\n";
+            return EXIT_FAILURE;
+        }
 
         std::string file_name = argv[3];
 
@@ -76,6 +78,11 @@ int main(int argc, char *argv[])
             file_name.substr(2);
 
         zstr::ifstream file(file_location);
+
+        if (!file.is_open()) {
+            std::cerr << "Could not open object file.\n";
+            return EXIT_FAILURE;
+        }
 
         std::string contents(
             (std::istreambuf_iterator<char>(file)),
@@ -90,22 +97,44 @@ int main(int argc, char *argv[])
         );
     }
 
+    // ---------------------------------------------------------
+    // git hash-object
+    // ---------------------------------------------------------
     else if (command == "hash-object") {
+
+        if (argc < 4) {
+            std::cerr << "Usage: hash-object -w <file>\n";
+            return EXIT_FAILURE;
+        }
 
         std::string file_name = argv[3];
 
+        // Read file contents
         std::ifstream file(file_name, std::ios::binary);
+
+        if (!file.is_open()) {
+            std::cerr << "Could not open file.\n";
+            return EXIT_FAILURE;
+        }
 
         std::string contents(
             (std::istreambuf_iterator<char>(file)),
             std::istreambuf_iterator<char>()
         );
 
+        file.close();
+
+        // Git blob header:
+        // "blob <size>\0"
         std::string header =
             "blob " + std::to_string(contents.size()) + '\0';
 
+        // Complete Git object
         std::string store = header + contents;
 
+        // -----------------------------------------------------
+        // Calculate SHA-1
+        // -----------------------------------------------------
         unsigned char output_buffer[SHA_DIGEST_LENGTH];
 
         unsigned char *input_buffer =
@@ -117,43 +146,60 @@ int main(int argc, char *argv[])
             output_buffer
         );
 
+        // Print SHA-1
         for (size_t i = 0; i < SHA_DIGEST_LENGTH; i++) {
             std::cout << char_hex(output_buffer[i]);
         }
 
         std::cout << '\n';
 
-        std::string dir_name = char_hex(output_buffer[0]);
+        // -----------------------------------------------------
+        // Create Git object path
+        // -----------------------------------------------------
 
-        std::string hash_file_name = "";
+        // First 2 characters of SHA-1
+        std::string dir_name =
+            char_hex(output_buffer[0]);
+
+        // Remaining 38 characters
+        std::string hash_file_name;
 
         for (int i = 1; i < SHA_DIGEST_LENGTH; i++) {
             hash_file_name += char_hex(output_buffer[i]);
         }
 
+        // Create:
+        // .git/objects/xx
         std::filesystem::create_directories(
             ".git/objects/" + dir_name
         );
 
+        // Full object path
         std::string hash_file_path =
-            ".git/objects/" + dir_name + "/" + hash_file_name;
+            ".git/objects/" +
+            dir_name +
+            "/" +
+            hash_file_name;
 
-        // Compress the Git object
-        std::string compressed = compress_string(store);
+        // -----------------------------------------------------
+        // Compress and write Git object
+        // -----------------------------------------------------
 
-        std::ofstream fout(
-            hash_file_path,
-            std::ios::binary
-        );
+        zstr::ofstream output_file(hash_file_path);
 
-        fout.write(
-            compressed.data(),
-            compressed.size()
-        );
+        if (!output_file.is_open()) {
+            std::cerr << "Could not create Git object file.\n";
+            return EXIT_FAILURE;
+        }
 
-        fout.close();
+        output_file << store;
+
+        output_file.close();
     }
 
+    // ---------------------------------------------------------
+    // Unknown command
+    // ---------------------------------------------------------
     else {
         std::cerr << "Unknown command " << command << '\n';
         return EXIT_FAILURE;
@@ -161,3 +207,4 @@ int main(int argc, char *argv[])
 
     return EXIT_SUCCESS;
 }
+```
