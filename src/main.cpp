@@ -2,7 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include "zstr/zstr.hpp"
+#include <zstr.hpp>
 
 int main(int argc, char *argv[])
 {
