@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <cstring>
 #include <algorithm>
+#include <ctime>
 #include <zstr.hpp>
 #include <openssl/sha.h>
 #include <zlib.h>
@@ -42,7 +43,7 @@ std::string hex_to_bytes(const std::string& hex)
     return bytes;
 }
 
-// Helper to hash and write any Git object (blob or tree)
+// Helper to hash and write any Git object (blob, tree, or commit)
 std::string hash_and_write_object(const std::string& type, const std::string& data)
 {
     std::string header = type + " " + std::to_string(data.size()) + '\0';
@@ -223,7 +224,6 @@ std::string write_tree_recursive(const std::filesystem::path& dir_path)
         }
     }
 
-    // Git strictly sorts tree entries alphabetically by name
     std::sort(entries.begin(), entries.end(), [](const TreeObjectEntry& a, const TreeObjectEntry& b) {
         return a.name < b.name;
     });
@@ -235,6 +235,73 @@ std::string write_tree_recursive(const std::filesystem::path& dir_path)
     }
 
     return hash_and_write_object("tree", tree_content);
+}
+
+// =============================================================
+// COMMIT-TREE
+// =============================================================
+void commit_tree(int argc, char* argv[])
+{
+    std::string tree_hash;
+    std::string parent_hash;
+    std::string message;
+
+    // Parse command line arguments for commit-tree
+    for (int i = 2; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "-p") == 0 && i + 1 < argc)
+        {
+            parent_hash = argv[i + 1];
+            i++;
+        }
+        else if (std::strcmp(argv[i], "-m") == 0 && i + 1 < argc)
+        {
+            message = argv[i + 1];
+            i++;
+        }
+        else if (tree_hash.empty())
+        {
+            tree_hash = argv[i];
+        }
+    }
+
+    if (tree_hash.empty() || message.empty())
+    {
+        std::cerr << "Usage: commit-tree <tree_hash> [-p <parent_hash>] -m <message>\n";
+        return;
+    }
+
+    // Default author/committer signature metadata used in Git tests
+    std::string name = "Codewith C++";
+    std::string email = "codecrafters@example.com";
+    
+    // Generate timestamp and timezone offset
+    std::time_t now = std::time(nullptr);
+    std::string timestamp = std::to_string(now);
+    std::string timezone = " +0000";
+
+    std::string commit_content = "tree " + tree_hash + "\n";
+    if (!parent_hash.empty())
+    {
+        commit_content += "parent " + parent_hash + "\n";
+    }
+
+    std::string author_line = "author " + name + " <" + email + "> " + timestamp + timezone;
+    std::string committer_line = "committer " + name + " <" + email + "> " + timestamp + timezone;
+
+    commit_content += author_line + "\n";
+    commit_content += committer_line + "\n\n";
+    commit_content += message + "\n";
+
+    std::string commit_hash = hash_and_write_object("commit", commit_content);
+    if (!commit_hash.empty())
+    {
+        std::cout << commit_hash << '\n';
+    }
+    else
+    {
+        std::cerr << "Failed to write commit object.\n";
+    }
 }
 
 int main(int argc, char* argv[])
@@ -380,6 +447,14 @@ int main(int argc, char* argv[])
             std::cerr << "Failed to write tree object.\n";
             return EXIT_FAILURE;
         }
+    }
+
+    // =========================================================
+    // COMMIT-TREE
+    // =========================================================
+    else if (command == "commit-tree")
+    {
+        commit_tree(argc, argv);
     }
 
     // =========================================================
