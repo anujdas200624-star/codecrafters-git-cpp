@@ -11,6 +11,7 @@
 #include <zstr.hpp>
 #include <openssl/sha.h>
 #include <zlib.h>
+#include <curl/curl.h>
 
 std::string char_hex(unsigned char data)
 {
@@ -301,6 +302,56 @@ void commit_tree(int argc, char* argv[])
     }
 }
 
+// =============================================================
+// CLONE (Libcurl HTTP callback helper)
+// =============================================================
+size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp)
+{
+    ((std::string*)userp)->append((char*)contents, size * nmemb);
+    return size * nmemb;
+}
+
+void clone_repo(const std::string& repo_url, const std::string& target_dir)
+{
+    // 1. Create target directory and standard git structure
+    std::filesystem::create_directories(target_dir + "/.git/objects");
+    std::filesystem::create_directories(target_dir + "/.git/refs");
+
+    std::ofstream head_file(target_dir + "/.git/HEAD");
+    if (head_file.is_open())
+    {
+        head_file << "ref: refs/heads/main\n";
+        head_file.close();
+    }
+
+    // 2. Fetch refs via libcurl (Smart HTTP discovery)
+    CURL* curl = curl_easy_init();
+    if (!curl)
+    {
+        std::cerr << "Failed to initialize cURL.\n";
+        return;
+    }
+
+    std::string info_refs_url = repo_url + "/info/refs?service=git-upload-pack";
+    std::string read_buffer;
+
+    curl_easy_setopt(curl, CURLOPT_URL, info_refs_url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &read_buffer);
+    
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK)
+    {
+        std::cerr << "cURL request failed: " << curl_easy_strerror(res) << '\n';
+        curl_easy_cleanup(curl);
+        return;
+    }
+    curl_easy_cleanup(curl);
+
+    // Basic target directory checkout preparation can follow here depending on CodeCrafters progression.
+    std::cout << "Cloning " << repo_url << " into " << target_dir << "...\n";
+}
+
 int main(int argc, char* argv[])
 {
     std::cout << std::unitbuf;
@@ -452,6 +503,19 @@ int main(int argc, char* argv[])
     else if (command == "commit-tree")
     {
         commit_tree(argc, argv);
+    }
+
+    // =========================================================
+    // CLONE
+    // =========================================================
+    else if (command == "clone")
+    {
+        if (argc < 4)
+        {
+            std::cerr << "Usage: clone <repo_url> <target_dir>\n";
+            return EXIT_FAILURE;
+        }
+        clone_repo(argv[2], argv[3]);
     }
 
     // =========================================================
