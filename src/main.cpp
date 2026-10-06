@@ -246,7 +246,6 @@ void commit_tree(int argc, char* argv[])
     std::string parent_hash;
     std::string message;
 
-    // Parse command line arguments for commit-tree
     for (int i = 2; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "-p") == 0 && i + 1 < argc)
@@ -271,11 +270,9 @@ void commit_tree(int argc, char* argv[])
         return;
     }
 
-    // Default author/committer signature metadata used in Git tests
     std::string name = "Codewith C++";
     std::string email = "codecrafters@example.com";
     
-    // Generate timestamp and timezone offset
     std::time_t now = std::time(nullptr);
     std::string timestamp = std::to_string(now);
     std::string timezone = " +0000";
