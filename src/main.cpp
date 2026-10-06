@@ -88,13 +88,25 @@ std::string hash_and_write_object(const std::string& type, const std::string& da
     return hash;
 }
 
-// Helper to read a raw decompressed Git object from the filesystem
+// Helper to safely read a raw decompressed Git object from the filesystem
 std::string read_object(const std::string& hash)
 {
+    if (hash.size() != 40) return "";
+    
     std::string file_location = ".git/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
-    zstr::ifstream file(file_location);
-    if (!file.is_open()) return "";
-    return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    
+    // Prevent strict_fstream::Exception by checking if the file actually exists
+    if (!std::filesystem::exists(file_location)) {
+        return "";
+    }
+
+    try {
+        zstr::ifstream file(file_location, std::ios::binary);
+        if (!file.is_open()) return "";
+        return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    } catch (...) {
+        return "";
+    }
 }
 
 // Helper to recursively checkout a tree into the working directory
@@ -134,6 +146,8 @@ void checkout_tree_recursive(const std::string& tree_hash, const std::filesystem
         else // Blob (File)
         {
             std::string blob_data = read_object(obj_hash);
+            if (blob_data.empty()) continue; // Skip gracefully if blob isn't found
+            
             size_t blob_null = blob_data.find('\0');
             if (blob_null != std::string::npos)
             {
