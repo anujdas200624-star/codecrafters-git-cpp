@@ -30,6 +30,62 @@ std::string bytes_to_hex(const unsigned char* data, size_t size)
     return result;
 }
 
+std::string hex_to_bytes(const std::string& hex)
+{
+    std::string bytes;
+    for (size_t i = 0; i < hex.size(); i += 2)
+    {
+        std::string byteString = hex.substr(i, 2);
+        unsigned char byte = static_cast<unsigned char>(strtol(byteString.c_str(), nullptr, 16));
+        bytes.push_back(byte);
+    }
+    return bytes;
+}
+
+// Helper to hash and write any Git object (blob or tree)
+std::string hash_and_write_object(const std::string& type, const std::string& data)
+{
+    std::string header = type + " " + std::to_string(data.size()) + '\0';
+    std::string store = header + data;
+
+    unsigned char output_buffer[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast<const unsigned char*>(store.data()), store.size(), output_buffer);
+    std::string hash = bytes_to_hex(output_buffer, SHA_DIGEST_LENGTH);
+
+    std::string dir_name = hash.substr(0, 2);
+    std::string hash_file_name = hash.substr(2);
+    std::filesystem::create_directories(".git/objects/" + dir_name);
+    std::string hash_file_path = ".git/objects/" + dir_name + "/" + hash_file_name;
+
+    uLong source_size = static_cast<uLong>(store.size());
+    uLong compressed_size = compressBound(source_size);
+    std::string compressed_data(compressed_size, '\0');
+
+    int result = compress(
+        reinterpret_cast<Bytef*>(compressed_data.data()),
+        &compressed_size,
+        reinterpret_cast<const Bytef*>(store.data()),
+        source_size
+    );
+
+    if (result != Z_OK)
+    {
+        return "";
+    }
+    
+    compressed_data.resize(compressed_size);
+
+    std::ofstream output_file(hash_file_path, std::ios::binary);
+    if (!output_file.is_open())
+    {
+        return "";
+    }
+    output_file.write(compressed_data.data(), compressed_data.size());
+    output_file.close();
+
+    return hash;
+}
+
 // =============================================================
 // LS-TREE
 // =============================================================
@@ -80,19 +136,16 @@ void ls_tree(const std::string& hash, bool name_only)
 
     while (pos < object.size())
     {
-        // Find mode
         size_t mode_end = object.find(' ', pos);
         if (mode_end == std::string::npos) break;
         std::string mode = object.substr(pos, mode_end - pos);
         pos = mode_end + 1;
 
-        // Find filename
         size_t name_end = object.find('\0', pos);
         if (name_end == std::string::npos) break;
         std::string name = object.substr(pos, name_end - pos);
         pos = name_end + 1;
 
-        // Read 20-byte SHA-1
         if (pos + 20 > object.size()) break;
         const unsigned char* sha = reinterpret_cast<const unsigned char*>(object.data() + pos);
         std::string object_hash = bytes_to_hex(sha, 20);
@@ -102,7 +155,6 @@ void ls_tree(const std::string& hash, bool name_only)
         entries.push_back({mode, type, object_hash, name});
     }
 
-    // Git strictly sorts tree entries alphabetically by name
     std::sort(entries.begin(), entries.end(), [](const TreeEntry& a, const TreeEntry& b) {
         return a.name < b.name;
     });
@@ -115,13 +167,74 @@ void ls_tree(const std::string& hash, bool name_only)
         }
         else
         {
-            // Git normally pads the mode to 6 digits (e.g., 40000 -> 040000)
             std::string padded_mode = entry.mode;
             while (padded_mode.size() < 6) padded_mode = "0" + padded_mode;
             
             std::cout << padded_mode << " " << entry.type << " " << entry.hash << "\t" << entry.name << '\n';
         }
     }
+}
+
+// =============================================================
+// WRITE-TREE
+// =============================================================
+struct TreeObjectEntry {
+    std::string mode;
+    std::string name;
+    std::string hash_hex;
+};
+
+std::string write_tree_recursive(const std::filesystem::path& dir_path)
+{
+    std::vector<TreeObjectEntry> entries;
+
+    for (const auto& entry : std::filesystem::directory_iterator(dir_path))
+    {
+        std::string filename = entry.path().filename().string();
+        if (filename == ".git")
+        {
+            continue;
+        }
+
+        if (entry.is_directory())
+        {
+            std::string sub_hash = write_tree_recursive(entry.path());
+            if (sub_hash.empty()) return "";
+            entries.push_back({"40000", filename, sub_hash});
+        }
+        else if (entry.is_regular_file())
+        {
+            std::ifstream file(entry.path(), std::ios::binary);
+            if (!file.is_open()) continue;
+            std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            file.close();
+
+            std::string blob_hash = hash_and_write_object("blob", contents);
+            if (blob_hash.empty()) return "";
+
+            std::string mode = "100644";
+            auto permissions = entry.status().permissions();
+            if ((permissions & std::filesystem::perms::owner_exec) != std::filesystem::perms::none)
+            {
+                mode = "100755";
+            }
+
+            entries.push_back({mode, filename, blob_hash});
+        }
+    }
+
+    // Git strictly sorts tree entries alphabetically by name
+    std::sort(entries.begin(), entries.end(), [](const TreeObjectEntry& a, const TreeObjectEntry& b) {
+        return a.name < b.name;
+    });
+
+    std::string tree_content;
+    for (const auto& entry : entries)
+    {
+        tree_content += entry.mode + " " + entry.name + '\0' + hex_to_bytes(entry.hash_hex);
+    }
+
+    return hash_and_write_object("tree", tree_content);
 }
 
 int main(int argc, char* argv[])
@@ -227,52 +340,14 @@ int main(int argc, char* argv[])
         std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         file.close();
 
-        // Blob header formatting
-        std::string header = "blob " + std::to_string(contents.size()) + '\0';
-        std::string store = header + contents;
-
-        // SHA-1
-        unsigned char output_buffer[SHA_DIGEST_LENGTH];
-        SHA1(reinterpret_cast<const unsigned char*>(store.data()), store.size(), output_buffer);
-        std::string hash = bytes_to_hex(output_buffer, SHA_DIGEST_LENGTH);
+        std::string hash = hash_and_write_object("blob", contents);
+        if (hash.empty())
+        {
+            std::cerr << "Failed to hash/write object.\n";
+            return EXIT_FAILURE;
+        }
 
         std::cout << hash << '\n';
-
-        // Object path
-        std::string dir_name = hash.substr(0, 2);
-        std::string hash_file_name = hash.substr(2);
-        std::filesystem::create_directories(".git/objects/" + dir_name);
-        std::string hash_file_path = ".git/objects/" + dir_name + "/" + hash_file_name;
-
-        // Standard Zlib compression
-        uLong source_size = static_cast<uLong>(store.size());
-        uLong compressed_size = compressBound(source_size);
-        std::string compressed_data(compressed_size, '\0');
-
-        int result = compress(
-            reinterpret_cast<Bytef*>(compressed_data.data()),
-            &compressed_size,
-            reinterpret_cast<const Bytef*>(store.data()),
-            source_size
-        );
-
-        if (result != Z_OK)
-        {
-            std::cerr << "Failed to compress Git object.\n";
-            return EXIT_FAILURE;
-        }
-        
-        compressed_data.resize(compressed_size);
-
-        // Write object
-        std::ofstream output_file(hash_file_path, std::ios::binary);
-        if (!output_file.is_open())
-        {
-            std::cerr << "Could not create Git object file.\n";
-            return EXIT_FAILURE;
-        }
-        output_file.write(compressed_data.data(), compressed_data.size());
-        output_file.close();
     }
 
     // =========================================================
@@ -288,6 +363,23 @@ int main(int argc, char* argv[])
 
         std::string hash = argv[argc - 1];
         ls_tree(hash, name_only);
+    }
+
+    // =========================================================
+    // WRITE-TREE
+    // =========================================================
+    else if (command == "write-tree")
+    {
+        std::string root_hash = write_tree_recursive(".");
+        if (!root_hash.empty())
+        {
+            std::cout << root_hash << '\n';
+        }
+        else
+        {
+            std::cerr << "Failed to write tree object.\n";
+            return EXIT_FAILURE;
+        }
     }
 
     // =========================================================
