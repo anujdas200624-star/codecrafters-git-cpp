@@ -88,6 +88,69 @@ std::string hash_and_write_object(const std::string& type, const std::string& da
     return hash;
 }
 
+// Helper to read a raw decompressed Git object from the filesystem
+std::string read_object(const std::string& hash)
+{
+    std::string file_location = ".git/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
+    zstr::ifstream file(file_location);
+    if (!file.is_open()) return "";
+    return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+}
+
+// Helper to recursively checkout a tree into the working directory
+void checkout_tree_recursive(const std::string& tree_hash, const std::filesystem::path& base_path)
+{
+    std::string object_data = read_object(tree_hash);
+    if (object_data.empty()) return;
+
+    size_t null_pos = object_data.find('\0');
+    if (null_pos == std::string::npos) return;
+
+    size_t pos = null_pos + 1;
+    while (pos < object_data.size())
+    {
+        size_t mode_end = object_data.find(' ', pos);
+        if (mode_end == std::string::npos) break;
+        std::string mode = object_data.substr(pos, mode_end - pos);
+        pos = mode_end + 1;
+
+        size_t name_end = object_data.find('\0', pos);
+        if (name_end == std::string::npos) break;
+        std::string name = object_data.substr(pos, name_end - pos);
+        pos = name_end + 1;
+
+        if (pos + 20 > object_data.size()) break;
+        const unsigned char* sha = reinterpret_cast<const unsigned char*>(object_data.data() + pos);
+        std::string obj_hash = bytes_to_hex(sha, 20);
+        pos += 20;
+
+        std::filesystem::path full_path = base_path / name;
+
+        if (mode == "40000" || mode == "040000") // Tree (Directory)
+        {
+            std::filesystem::create_directories(full_path);
+            checkout_tree_recursive(obj_hash, full_path);
+        }
+        else // Blob (File)
+        {
+            std::string blob_data = read_object(obj_hash);
+            size_t blob_null = blob_data.find('\0');
+            if (blob_null != std::string::npos)
+            {
+                std::ofstream out(full_path, std::ios::binary);
+                out.write(blob_data.data() + blob_null + 1, blob_data.size() - blob_null - 1);
+                out.close();
+
+                // Set executable permissions if needed
+                if (mode == "100755") {
+                    std::filesystem::permissions(full_path, std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec, std::filesystem::perm_options::add);
+                }
+            }
+        }
+    }
+}
+
+
 // =============================================================
 // LS-TREE
 // =============================================================
@@ -106,27 +169,14 @@ void ls_tree(const std::string& hash, bool name_only)
         return;
     }
     
-    std::string file_location =
-        std::string(".git/objects/") +
-        hash.substr(0, 2) +
-        "/" +
-        hash.substr(2);
-
-    zstr::ifstream file(file_location);
-
-    if (!file.is_open())
+    std::string object = read_object(hash);
+    if (object.empty())
     {
         std::cerr << "Could not open tree object.\n";
         return;
     }
 
-    std::string object(
-        (std::istreambuf_iterator<char>(file)),
-        std::istreambuf_iterator<char>()
-    );
-
     size_t null_pos = object.find('\0');
-
     if (null_pos == std::string::npos)
     {
         std::cerr << "Invalid tree object.\n";
@@ -352,7 +402,6 @@ void clone_repo(const std::string& repo_url, const std::string& target_dir)
 
     // 3. Post to /git-upload-pack to fetch the PACK file
     std::string pack_url = repo_url + "/git-upload-pack";
-    // 0032 length format implies NO capabilities string required for basic fetch
     std::string req = "0032want " + head_hash + "\n00000009done\n";
     std::string pack_response;
 
@@ -401,7 +450,6 @@ void clone_repo(const std::string& repo_url, const std::string& target_dir)
                     strm.next_in = (Bytef*)(pack_data + offset);
                     strm.avail_in = total_size - offset;
 
-                    // Robust chunked deflation loop
                     char out_buf[32768];
                     int ret;
                     do {
@@ -426,7 +474,6 @@ void clone_repo(const std::string& repo_url, const std::string& target_dir)
                     hash_and_write_object(obj_type, obj_data);
                 } 
                 else if (type >= 6) {
-                    // Safe parsing bypass for unanticipated Delta Objects (though excluded in challenge)
                     if (type == 6) {
                         c = pack_data[offset++];
                         while (c & 0x80) c = pack_data[offset++];
@@ -451,6 +498,19 @@ void clone_repo(const std::string& repo_url, const std::string& target_dir)
                     inflateEnd(&strm);
                 }
             }
+        }
+    }
+
+    // 5. Check out the root tree to the working directory
+    std::string commit_data = read_object(head_hash);
+    size_t null_pos = commit_data.find('\0');
+    if (null_pos != std::string::npos)
+    {
+        size_t tree_pos = commit_data.find("tree ", null_pos);
+        if (tree_pos != std::string::npos)
+        {
+            std::string root_tree_hash = commit_data.substr(tree_pos + 5, 40);
+            checkout_tree_recursive(root_tree_hash, ".");
         }
     }
 }
@@ -514,18 +574,14 @@ int main(int argc, char* argv[])
             return EXIT_FAILURE;
         }
 
-        std::string file_location = std::string(".git/objects/") + file_name.substr(0, 2) + "/" + file_name.substr(2);
-        zstr::ifstream file(file_location);
-
-        if (!file.is_open())
+        std::string contents = read_object(file_name);
+        if (contents.empty())
         {
             std::cerr << "Could not open object file.\n";
             return EXIT_FAILURE;
         }
 
-        std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         size_t null_pos = contents.find('\0');
-
         if (null_pos == std::string::npos)
         {
             std::cerr << "Invalid Git object.\n";
